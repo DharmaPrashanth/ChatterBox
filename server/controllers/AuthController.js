@@ -1,13 +1,7 @@
-import Account from "../models/AccountModel.js";
+import { compare } from "bcrypt";
 import User from "../models/UserModel.js";
 import jwt from "jsonwebtoken";
 import { rename, renameSync, unlinkSync } from "fs";
-import { initializeApp } from "firebase/app";
-import { getStorage, ref, getDownloadURL, uploadBytesResumable ,deleteObject} from "firebase/storage";
-
-
-import config from "../config/firebase.js";
-initializeApp(config.firebaseConfig);
 import path from "path";
 const maxAge = 3 * 24 * 60 * 60 * 1000; /* Token Valid for 3 days */
 const createToken = (email, userId) => {
@@ -16,20 +10,17 @@ const createToken = (email, userId) => {
     expiresIn: maxAge,
   }); /* JWT_KEY is encryption key */
 };
-
-const storage = getStorage();
 export const signup = async (request, response, next) => {
   try {
-    const { email, token } = request.body;
-    if (!email ) {
+    const { email, password } = request.body;
+    if (!email || !password) {
       return response.status(400).send("Email and Password are required");
     }
     const user = await User.create({
       email,
-      token
-      
-    });
-    response.cookie("jwt", token, {
+      password,
+    }); /* As the email and password are required fields*/
+    response.cookie("jwt", createToken(email, user.id), {
       maxAge,
       secure: true,
       sameSite: "None",
@@ -38,11 +29,7 @@ export const signup = async (request, response, next) => {
       user: {
         id: user.id,
         email: user.email,
-        token: user.token,
-        image:null,
-        firstName:"New User",
-        lastName:"New User"
-
+        profileSetup: user.profileSetup,
       },
     });
   } catch (err) {
@@ -50,31 +37,25 @@ export const signup = async (request, response, next) => {
     return response.status(500).send("Internal server Error");
   }
 };
-
+/* For Login */
 export const login = async (request, response, next) => {
   try {
-    const { email,token} = request.body;
-    if (!email || !token) {
+    const { email, password } = request.body;
+    if (!email || !password) {
       return response.status(400).send("Email and Password are required");
     }
     const user = await User.findOne({
       email,
-    }).populate('Accounts').populate({
-      path: 'Transactions',
-      populate: { 
-        path: 'Account', 
-      }
-    });
+    }); /* As the email is Unique we are using findone function*/
     if (!user) return response.status(404).send("User Not Found");
-   
-    response.cookie("jwt", token, {
+    const auth = await compare(password, user.password); /* Returns a Boolean Value*/
+    if (!auth) return response.status(400).send("Password is Incorrect");
+    response.cookie("jwt", createToken(email, user.id), {
       maxAge,
       secure: true,
       sameSite: "None",
     });
-
-   // console.log(user);
-    
+    /* 201 for creating and 200 for fetching */
     return response.status(200).json({
       user: {
         id: user.id,
@@ -83,8 +64,7 @@ export const login = async (request, response, next) => {
         firstName: user.firstName,
         lastName: user.lastName,
         image: user.image,
-        Accounts:user.Accounts,
-        Transactions:user.Transactions
+        color: user.color,
       },
     });
   } catch (err) {
@@ -95,12 +75,7 @@ export const login = async (request, response, next) => {
 
 export const getUserInfo = async (request, response, next) => {
   try {
-    const userData = await User.findById(request.userId).populate('Accounts').populate({
-      path: 'Transactions',
-      populate: { 
-        path: 'Account', 
-      }
-    });
+    const userData = await User.findById(request.userId);
     if (!userData) {
       return response.status(404).send("User With Given Id not found");
     }
@@ -112,9 +87,6 @@ export const getUserInfo = async (request, response, next) => {
       lastName: userData.lastName,
       image: userData.image,
       color: userData.color,
-      Accounts:userData.Accounts,
-      Transactions:userData.Transactions
-
     });
   } catch (err) {
     console.log({ err });
@@ -124,29 +96,25 @@ export const getUserInfo = async (request, response, next) => {
 
 export const updateProfile = async (request, response, next) => {
   try {
-    
-    const { firstName, lastName , user} = request.body;
+    const { userId } = request;
+    const { firstName, lastName, color } = request.body;
     if (!firstName || !lastName) {
       return response
         .status(400)
-        .send("FirstName , LastName is required");
+        .send("FirstName , LastName , and color is required");
     }
-   // console.log(request.body)
 
     const userData = await User.findByIdAndUpdate(
-      user.id,
+      userId,
       {
         firstName,
         lastName,
+        color,
         profileSetup: true,
       },
       { new: true, runValidators: true }
-    ).populate('Accounts').populate({
-      path: 'Transactions',
-      populate: { 
-        path: 'Account', 
-      }
-    });
+    );
+
     return response.status(200).json({
       id: userData.id,
       email: userData.email,
@@ -154,9 +122,7 @@ export const updateProfile = async (request, response, next) => {
       firstName: userData.firstName,
       lastName: userData.lastName,
       image: userData.image,
-      Accounts:userData.Accounts,
-      Transactions:userData.Transactions
-
+      color: userData.color,
     });
   } catch (err) {
     console.log({ err });
@@ -164,43 +130,22 @@ export const updateProfile = async (request, response, next) => {
   }
 };
 
-
-
-
-
-
 export const addProfileImage = async (request, response, next) => {
   if (!request.file) {
     return response.status(400).send("File is Required");
   }
-  const { userInfo } = request.body;
- // console.log(request.body);
-  const dateTime = Date.now();
 
-  const fileName = ref(storage, `files/${request.file.originalname + "       " + dateTime}`);
-  
-
-  // Create file metadata including the content type
-  const metadata = {
-      contentType: request.file.mimetype,
-  };
- // renameSync(request.file.path, fileName);
-  const snapshot = await uploadBytesResumable(fileName, request.file.buffer, metadata);
-  // By using uploadBytesResumable we can control the progress of uploading like pause, resume, cancel
-
-  // Grab the public url
-  const downloadURL = await getDownloadURL(snapshot.ref);
-  //console.log(downloadURL)
-
+  const date = Date.now();
+  let fileName = "uploads/profiles/" + date + request.file.originalname;
+  renameSync(request.file.path, fileName);
 
   try {
     const updatedUser = await User.findByIdAndUpdate(
-      userInfo,
-      { image: downloadURL},
+      request.userId,
+      { image: fileName },
       { new: true, runValidators: true }
-    ).populate('Accounts');
-   //console.log(updatedUser)
-  // console.log(userInfo)
+    );
+
     return response.status(200).json({
       image: updatedUser.image,
     });
@@ -212,34 +157,37 @@ export const addProfileImage = async (request, response, next) => {
 
 export const removeProfileImage = async (request, response, next) => {
   try {
-    const {user,image} = request.body
-   // console.log(userInfo)
-  //  console.log(request.body)
-    const user1 = await User.findById(user.id).populate('Accounts');
+    const { userId } = request;
+    const user = await User.findById(userId);
 
-    
-
-    if (!user1) {
+    if (!user) {
       return response.status(404).send("User Not Found");
     }
-   
-    user1.image = null;
-    await user1.save();
+    if (user.image) {
+      unlinkSync(user.image);
+    }
+    user.image = null;
+    await user.save();
 
-    const desertRef = ref(storage, image);
-
-    deleteObject(desertRef).then(() => {
-      // File deleted successfully
-      return response.status(200).send("Profile Image Removed Successfully");
-    }).catch((error) => {
-      // Uh-oh, an error occurred!
-      return response.status(500).send("Internal server Error");
-    });
-
+    return response.status(200).send("Profile Image Removed Successfully");
   } catch (err) {
     console.log({ err });
     return response.status(500).send("Internal server Error");
   }
 };
 
+export const logout = async (request, response, next) => {
+  try {
+    response.cookie("jwt", "", {
+      maxAge: 1,
+      secure: true,
+      sameSite: 'None',
+      httpOnly: true, // Ensures the cookie is only accessible via HTTP(S) requests
+    });
 
+    return response.status(200).json({ message: "Logout Successful" });
+  } catch (err) {
+    console.log({ err });
+    return response.status(500).json({ message: "Unable to Logout" });
+  }
+};

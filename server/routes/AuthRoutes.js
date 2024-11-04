@@ -1,29 +1,30 @@
 import { Router } from "express";
 import {
+  getUserInfo,
   login,
   signup,
   updateProfile,
   addProfileImage,
-
-  removeProfileImage
+  removeProfileImage,
+  logout
 } from "../controllers/AuthController.js";
+import { verifyToken } from "../middleware/AuthMiddleware.js";
+import multer from "multer";
 
-import { initializeApp } from "firebase/app";
-import { getStorage } from "firebase/storage";
-import multer from "multer"
-import config from "../config/firebase.js";
-initializeApp(config.firebaseConfig);
-const storage = getStorage();
-const upload = multer({ storage: multer.memoryStorage() });
+const upload = multer({ dest: "uploads/profiles/" });
+
 const authRoutes = Router();
+authRoutes.post("/signup", signup);
+authRoutes.post("/login", login);
+authRoutes.get("/user-info", verifyToken, getUserInfo);
+authRoutes.post("/update-profile", verifyToken, updateProfile);
 authRoutes.post(
   "/add-profile-image",
+  verifyToken,
   upload.single("profile-image"),
   addProfileImage
 );
-authRoutes.post("/remove-profile-image",removeProfileImage)
+authRoutes.delete("/remove-profile-image", verifyToken, removeProfileImage);
+authRoutes.post("/logout" , logout)
 
-authRoutes.post("/signup", signup);
-authRoutes.post("/login",login);
-authRoutes.post("/update-profile", updateProfile);
 export default authRoutes;
